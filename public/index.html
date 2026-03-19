@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Teleprompter</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0a0a0a;
+  --bg-card: #141414;
+  --text: #f0f0f0;
+  --text-dim: #888;
+  --text-spoken: rgba(255,255,255,0.25);
+  --text-current: #ffcc00;
+  --accent: #ff3b30;
+  --accent-green: #30d158;
+  --font-size: 28px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+#edit-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding: calc(16px + var(--safe-top)) 16px calc(16px + var(--safe-bottom));
+}
+
+.edit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0 16px;
+  flex-shrink: 0;
+}
+.edit-header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
+
+.settings-btn {
+  background: var(--bg-card); border: 1px solid #333; color: var(--text);
+  width: 40px; height: 40px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+
+#script-input {
+  flex: 1; width: 100%; background: var(--bg-card); border: 1px solid #333;
+  border-radius: 16px; color: var(--text); font-size: 16px; line-height: 1.6;
+  padding: 16px; resize: none; outline: none; font-family: inherit;
+}
+#script-input::placeholder { color: #555; }
+#script-input:focus { border-color: #555; }
+
+.edit-actions { padding-top: 16px; flex-shrink: 0; }
+
+.btn-primary {
+  width: 100%; height: 56px; background: var(--accent); color: white; border: none;
+  border-radius: 16px; font-size: 17px; font-weight: 600; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  transition: opacity 0.15s;
+}
+.btn-primary:active { opacity: 0.8; }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+#record-screen {
+  display: none; position: relative; width: 100%; height: 100dvh;
+  overflow: hidden; background: #000;
+}
+
+#camera-preview {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; transform: scaleX(-1);
+}
+
+.gradient-overlay {
+  position: absolute; inset: 0; pointer-events: none; z-index: 1;
+  background: linear-gradient(to bottom,
+    rgba(0,0,0,0.75) 0%, rgba(0,0,0,0.45) 25%, transparent 45%,
+    transparent 65%, rgba(0,0,0,0.5) 85%, rgba(0,0,0,0.8) 100%);
+}
+
+#teleprompter-container {
+  position: absolute; top: calc(12px + var(--safe-top));
+  left: 16px; right: 16px; height: 38vh; overflow: hidden; z-index: 2;
+  mask-image: linear-gradient(to bottom, black 0%, black 75%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 75%, transparent 100%);
+}
+
+#teleprompter-text {
+  font-size: var(--font-size); line-height: 1.6; font-weight: 500;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.8), 0 0 20px rgba(0,0,0,0.5);
+  padding-bottom: 40vh;
+}
+
+.word { display: inline; color: var(--text); transition: color 0.2s ease; }
+.word.spoken { color: var(--text-spoken); }
+.word.current {
+  color: var(--text-current); font-weight: 700;
+  text-shadow: 0 0 12px rgba(255,204,0,0.4), 0 2px 8px rgba(0,0,0,0.8);
+}
+
+#controls-bar {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  padding: 16px 20px calc(16px + var(--safe-bottom));
+  display: flex; align-items: center; justify-content: space-between; z-index: 3;
+}
+
+.rec-indicator { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rec-dot { width: 10px; height: 10px; background: var(--accent); border-radius: 50%; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.btn-stop {
+  height: 48px; padding: 0 24px; background: var(--accent); color: white;
+  border: none; border-radius: 24px; font-size: 15px; font-weight: 600; cursor: pointer;
+}
+.btn-stop:active { opacity: 0.8; }
+
+.btn-back {
+  height: 40px; padding: 0 16px; background: rgba(255,255,255,0.15); color: white;
+  border: none; border-radius: 20px; font-size: 14px; font-weight: 500;
+  cursor: pointer; backdrop-filter: blur(8px);
+}
+
+#settings-modal {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(8px); z-index: 100; align-items: flex-end; justify-content: center;
+}
+#settings-modal.open { display: flex; }
+
+.settings-sheet {
+  background: var(--bg-card); border-radius: 20px 20px 0 0; width: 100%;
+  max-width: 480px; padding: 24px 20px calc(24px + var(--safe-bottom));
+  max-height: 70vh; overflow-y: auto;
+}
+.settings-sheet h2 { font-size: 18px; margin-bottom: 20px; }
+.setting-row { margin-bottom: 20px; }
+.setting-row label { display: block; font-size: 14px; color: var(--text-dim); margin-bottom: 8px; }
+.setting-row input[type="range"] { width: 100%; accent-color: var(--text-current); }
+.setting-row input[type="text"],
+.setting-row input[type="password"] {
+  width: 100%; height: 44px; background: var(--bg); border: 1px solid #333;
+  border-radius: 10px; color: var(--text); padding: 0 12px;
+  font-size: 14px; font-family: monospace; outline: none;
+}
+.setting-row input:focus { border-color: #555; }
+.font-size-display { float: right; color: var(--text); font-weight: 600; }
+.settings-close {
+  width: 100%; height: 48px; background: #333; color: white; border: none;
+  border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 8px;
+}
+
+#status-overlay {
+  display: none; position: fixed; top: calc(16px + var(--safe-top)); left: 50%;
+  transform: translateX(-50%); background: rgba(0,0,0,0.8); backdrop-filter: blur(8px);
+  padding: 10px 20px; border-radius: 20px; font-size: 13px; color: var(--text-dim);
+  z-index: 50; white-space: nowrap;
+}
+#status-overlay.visible { display: block; }
+
+#error-toast {
+  display: none; position: fixed; bottom: calc(100px + var(--safe-bottom));
+  left: 16px; right: 16px; background: #331111; border: 1px solid #662222;
+  color: #ff6b6b; padding: 14px 16px; border-radius: 14px; font-size: 14px;
+  line-height: 1.4; z-index: 200; text-align: center;
+}
+#error-toast.visible { display: block; }
+
+@media (orientation: landscape) {
+  #teleprompter-container { height: 50vh; left: 20%; right: 20%; }
+}
+</style>
+</head>
+<body>
+
+<div id="edit-screen">
+  <div class="edit-header">
+    <h1>Teleprompter</h1>
+    <button class="settings-btn" onclick="toggleSettings()" aria-label="Settings">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+      </svg>
+    </button>
+  </div>
+  <textarea id="script-input" placeholder="Paste your script here...&#10;&#10;Hinglish, Hindi, English — whatever you speak.&#10;The teleprompter will follow along as you read."></textarea>
+  <div class="edit-actions">
+    <button class="btn-primary" id="btn-start" onclick="startRecording()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>
+      Start Recording
+    </button>
+  </div>
+</div>
+
+<div id="record-screen">
+  <video id="camera-preview" autoplay muted playsinline></video>
+  <div class="gradient-overlay"></div>
+  <div id="teleprompter-container">
+    <div id="teleprompter-text"></div>
+  </div>
+  <div id="controls-bar">
+    <button class="btn-back" onclick="backToEdit()">Back</button>
+    <div class="rec-indicator">
+      <div class="rec-dot"></div>
+      <span id="rec-timer">00:00</span>
+    </div>
+    <button class="btn-stop" onclick="stopAndSave()">Stop & Save</button>
+  </div>
+</div>
+
+<div id="settings-modal">
+  <div class="settings-sheet">
+    <h2>Settings</h2>
+    <div class="setting-row">
+      <label>Font Size <span class="font-size-display" id="font-size-val">28px</span></label>
+      <input type="range" id="font-size-slider" min="18" max="56" value="28" oninput="updateFontSize(this.value)">
+    </div>
+    <div class="setting-row">
+      <label>Sarvam API Key</label>
+      <input type="password" id="api-key-input" placeholder="sk_..." autocomplete="off">
+    </div>
+    <button class="settings-close" onclick="toggleSettings()">Done</button>
+  </div>
+</div>
+
+<div id="status-overlay"></div>
+<div id="error-toast"></div>
+
+<script>
+// ============================================================
+// CONFIG
+// ============================================================
+const CONFIG = {
+  FUZZY_THRESHOLD: 0.5,
+  WINDOW_SIZE: 10,
+  LOOKBACK: 4,
+  SEND_INTERVAL_MS: 300,
+  SARVAM_SAMPLE_RATE: 16000,
+  VIDEO_CODECS: [
+    'video/mp4;codecs=avc1.640034,mp4a.40.2',
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+  ],
+};
+
+// ============================================================
+// STATE
+// ============================================================
+const state = {
+  words: [],
+  currentIndex: -1,
+  cameraStream: null,
+  mediaRecorder: null,
+  recordedChunks: [],
+  selectedMimeType: '',
+  proxyWs: null,
+  audioContext: null,
+  audioProcessor: null,
+  recordingStartTime: null,
+  timerInterval: null,
+  isRecording: false,
+  audioBuffer: [],
+  sendInterval: null,
+};
+
+// ============================================================
+// INIT
+// ============================================================
+(function init() {
+  const savedKey = localStorage.getItem('sarvam_api_key');
+  if (savedKey) document.getElementById('api-key-input').value = savedKey;
+
+  const savedFont = localStorage.getItem('teleprompter_font_size');
+  if (savedFont) {
+    document.getElementById('font-size-slider').value = savedFont;
+    updateFontSize(savedFont);
+  }
+
+  document.getElementById('api-key-input').addEventListener('change', (e) => {
+    localStorage.setItem('sarvam_api_key', e.target.value.trim());
+  });
+})();
+
+// ============================================================
+// SETTINGS
+// ============================================================
+function toggleSettings() {
+  document.getElementById('settings-modal').classList.toggle('open');
+}
+
+function updateFontSize(val) {
+  document.documentElement.style.setProperty('--font-size', val + 'px');
+  document.getElementById('font-size-val').textContent = val + 'px';
+  localStorage.setItem('teleprompter_font_size', val);
+}
+
+// ============================================================
+// SCRIPT PARSING
+// ============================================================
+function parseScript(raw) {
+  return raw.split(/\s+/).filter(t => t.length > 0).map((token, i) => ({
+    text: token,
+    normalized: normalize(token),
+    index: i,
+  }));
+}
+
+function normalize(word) {
+  return word.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function renderWords(words) {
+  const container = document.getElementById('teleprompter-text');
+  container.innerHTML = '';
+  words.forEach((w, i) => {
+    const span = document.createElement('span');
+    span.className = 'word';
+    span.dataset.index = i;
+    span.textContent = w.text;
+    container.appendChild(span);
+    if (i < words.length - 1) container.appendChild(document.createTextNode(' '));
+  });
+}
+
+// ============================================================
+// FUZZY MATCHING
+// ============================================================
+function dice(a, b) {
+  if (a === b) return 1.0;
+  if (a.length < 2 || b.length < 2) return a === b ? 1 : 0;
+  const bigrams = new Map();
+  for (let i = 0; i < a.length - 1; i++) {
+    const bg = a.slice(i, i + 2);
+    bigrams.set(bg, (bigrams.get(bg) || 0) + 1);
+  }
+  let intersection = 0;
+  for (let i = 0; i < b.length - 1; i++) {
+    const bg = b.slice(i, i + 2);
+    const count = bigrams.get(bg);
+    if (count > 0) { bigrams.set(bg, count - 1); intersection++; }
+  }
+  return (2 * intersection) / (a.length - 1 + b.length - 1);
+}
+
+function findBestMatch(recognizedWords, scriptWords, currentIndex) {
+  const windowStart = Math.max(0, currentIndex - CONFIG.LOOKBACK);
+  const windowEnd = Math.min(scriptWords.length - 1, currentIndex + CONFIG.WINDOW_SIZE);
+  let bestIndex = currentIndex;
+  let bestScore = 0;
+
+  for (const rWord of recognizedWords) {
+    if (rWord.length < 2) continue;
+    for (let i = windowStart; i <= windowEnd; i++) {
+      const score = dice(rWord, scriptWords[i].normalized);
+      if (score >= CONFIG.FUZZY_THRESHOLD && i >= bestIndex) {
+        if (i > bestIndex || score > bestScore) {
+          bestIndex = i;
+          bestScore = score;
+        }
+      }
+    }
+  }
+  return { newIndex: bestIndex, confidence: bestScore };
+}
+
+function handleTranscript(transcript) {
+  if (!transcript) return;
+  const recognizedWords = transcript.split(/\s+/).map(normalize).filter(w => w.length >= 2);
+  if (recognizedWords.length > 0) {
+    const match = findBestMatch(recognizedWords, state.words, state.currentIndex);
+    if (match.newIndex > state.currentIndex) advanceToWord(match.newIndex);
+  }
+}
+
+// ============================================================
+// WORD HIGHLIGHTING + SCROLL
+// ============================================================
+function advanceToWord(newIndex) {
+  if (newIndex <= state.currentIndex) return;
+  const prevIndex = state.currentIndex;
+  state.currentIndex = newIndex;
+
+  for (let i = Math.max(0, prevIndex); i < newIndex; i++) {
+    const el = document.querySelector(`.word[data-index="${i}"]`);
+    if (el) { el.classList.add('spoken'); el.classList.remove('current'); }
+  }
+
+  const currentEl = document.querySelector(`.word[data-index="${newIndex}"]`);
+  if (currentEl) {
+    document.querySelector('.word.current')?.classList.remove('current');
+    currentEl.classList.add('current');
+    const container = document.getElementById('teleprompter-container');
+    container.scrollTo({
+      top: Math.max(0, currentEl.offsetTop - container.clientHeight * 0.25),
+      behavior: 'smooth',
+    });
+  }
+}
+
+// ============================================================
+// CAMERA — Max quality
+// ============================================================
+async function initCamera() {
+  const probeStream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'user' }, audio: true,
+  });
+
+  const videoTrack = probeStream.getVideoTracks()[0];
+  let maxW = 1920, maxH = 1080, maxFps = 30;
+
+  if (videoTrack.getCapabilities) {
+    const caps = videoTrack.getCapabilities();
+    maxW = caps.width?.max || 1920;
+    maxH = caps.height?.max || 1080;
+    maxFps = Math.min(caps.frameRate?.max || 30, 60);
+  }
+  probeStream.getTracks().forEach(t => t.stop());
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'user', width: { ideal: maxW }, height: { ideal: maxH }, frameRate: { ideal: maxFps } },
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true, sampleRate: { ideal: 48000 } },
+  });
+
+  const settings = stream.getVideoTracks()[0].getSettings();
+  showStatus(`${settings.width}x${settings.height} @ ${Math.round(settings.frameRate)}fps`);
+  return stream;
+}
+
+// ============================================================
+// VIDEO RECORDING
+// ============================================================
+function initRecorder(stream) {
+  let mime = '';
+  for (const m of CONFIG.VIDEO_CODECS) {
+    if (MediaRecorder.isTypeSupported(m)) { mime = m; break; }
+  }
+  state.selectedMimeType = mime;
+
+  const settings = stream.getVideoTracks()[0].getSettings();
+  const pixels = (settings.width || 1920) * (settings.height || 1080);
+  const videoBitrate = Math.min(pixels * 8 * (settings.frameRate || 30), 50_000_000);
+
+  const opts = { videoBitsPerSecond: videoBitrate, audioBitsPerSecond: 256_000 };
+  if (mime) opts.mimeType = mime;
+
+  const recorder = new MediaRecorder(stream, opts);
+  state.recordedChunks = [];
+  recorder.ondataavailable = (e) => { if (e.data.size > 0) state.recordedChunks.push(e.data); };
+  recorder.onstop = () => exportVideo();
+  recorder.start(1000);
+  return recorder;
+}
+
+function exportVideo() {
+  if (!state.recordedChunks.length) return;
+  const mime = state.selectedMimeType || 'video/webm';
+  const blob = new Blob(state.recordedChunks, { type: mime });
+  const ext = mime.includes('mp4') ? 'mp4' : 'webm';
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `teleprompter-${ts}.${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); state.recordedChunks = []; }, 1000);
+}
+
+// ============================================================
+// AUDIO PIPELINE — Downsample to 16kHz
+// ============================================================
+function initAudioPipeline(stream) {
+  const ctx = new AudioContext({ sampleRate: 48000 });
+  state.audioContext = ctx;
+  const source = ctx.createMediaStreamSource(stream);
+  const processor = ctx.createScriptProcessor(4096, 1, 1);
+
+  processor.onaudioprocess = (e) => {
+    if (!state.isRecording) return;
+    const input = e.inputBuffer.getChannelData(0);
+    const ratio = ctx.sampleRate / CONFIG.SARVAM_SAMPLE_RATE;
+    const outputLength = Math.floor(input.length / ratio);
+    const output = new Int16Array(outputLength);
+    for (let i = 0; i < outputLength; i++) {
+      const s = Math.max(-1, Math.min(1, input[Math.floor(i * ratio)]));
+      output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    state.audioBuffer.push(output);
+  };
+
+  source.connect(processor);
+  processor.connect(ctx.destination);
+  state.audioProcessor = processor;
+}
+
+function encodeWavChunk(samples) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+  const sr = CONFIG.SARVAM_SAMPLE_RATE;
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sr, true);
+  view.setUint32(28, sr * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) view.setInt16(44 + i * 2, samples[i], true);
+  return buffer;
+}
+
+function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 8192) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  }
+  return btoa(bin);
+}
+
+// ============================================================
+// WEBSOCKET — Connect to our proxy (which proxies to Sarvam)
+// ============================================================
+function connectProxy() {
+  const apiKey = localStorage.getItem('sarvam_api_key');
+  if (!apiKey) {
+    showError('No Sarvam API key set. Open Settings to add it.');
+    return;
+  }
+
+  // Build WebSocket URL to our server's /ws proxy
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${location.host}/ws?key=${encodeURIComponent(apiKey)}&lang=hi-IN`;
+
+  try {
+    const ws = new WebSocket(wsUrl);
+    state.proxyWs = ws;
+
+    ws.onopen = () => {
+      console.log('Proxy WS connected');
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'status' && msg.message === 'connected') {
+          showStatus('Listening (Sarvam AI)');
+          startAudioSending();
+        } else if (msg.type === 'data' && msg.data?.transcript) {
+          handleTranscript(msg.data.transcript.trim());
+        } else if (msg.type === 'error') {
+          console.error('Sarvam error:', msg.data?.error);
+          showError('Speech recognition error: ' + (msg.data?.error || 'Unknown'));
+        }
+      } catch (e) {
+        console.warn('WS parse error:', e);
+      }
+    };
+
+    ws.onerror = () => {
+      showError('Speech recognition connection failed. Check API key.');
+    };
+
+    ws.onclose = (e) => {
+      console.log('Proxy WS closed:', e.code, e.reason);
+      stopAudioSending();
+      // Auto-reconnect if still recording
+      if (state.isRecording) {
+        setTimeout(() => { if (state.isRecording) connectProxy(); }, 2000);
+      }
+    };
+  } catch (e) {
+    showError('Connection failed: ' + e.message);
+  }
+}
+
+function startAudioSending() {
+  stopAudioSending();
+  state.sendInterval = setInterval(() => {
+    if (!state.proxyWs || state.proxyWs.readyState !== WebSocket.OPEN) return;
+    if (state.audioBuffer.length === 0) return;
+
+    const totalLength = state.audioBuffer.reduce((sum, c) => sum + c.length, 0);
+    const combined = new Int16Array(totalLength);
+    let offset = 0;
+    for (const chunk of state.audioBuffer) { combined.set(chunk, offset); offset += chunk.length; }
+    state.audioBuffer = [];
+
+    const wavBuffer = encodeWavChunk(combined);
+    const base64 = arrayBufferToBase64(wavBuffer);
+
+    state.proxyWs.send(JSON.stringify({
+      audio: { data: base64, sample_rate: String(CONFIG.SARVAM_SAMPLE_RATE), encoding: 'audio/wav' }
+    }));
+  }, CONFIG.SEND_INTERVAL_MS);
+}
+
+function stopAudioSending() {
+  if (state.sendInterval) { clearInterval(state.sendInterval); state.sendInterval = null; }
+}
+
+// ============================================================
+// CLEANUP
+// ============================================================
+function stopSTT() {
+  stopAudioSending();
+  if (state.proxyWs) {
+    state.proxyWs.onclose = null;
+    state.proxyWs.close();
+    state.proxyWs = null;
+  }
+  if (state.audioProcessor) { state.audioProcessor.disconnect(); state.audioProcessor = null; }
+  if (state.audioContext) { state.audioContext.close(); state.audioContext = null; }
+  state.audioBuffer = [];
+}
+
+// ============================================================
+// TIMER
+// ============================================================
+function startTimer() {
+  state.recordingStartTime = Date.now();
+  const timerEl = document.getElementById('rec-timer');
+  state.timerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - state.recordingStartTime) / 1000);
+    timerEl.textContent = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
+  }, 500);
+}
+
+function stopTimer() {
+  if (state.timerInterval) { clearInterval(state.timerInterval); state.timerInterval = null; }
+}
+
+// ============================================================
+// UI HELPERS
+// ============================================================
+function showStatus(msg) {
+  const el = document.getElementById('status-overlay');
+  el.textContent = msg; el.classList.add('visible');
+  setTimeout(() => el.classList.remove('visible'), 3000);
+}
+
+function showError(msg) {
+  const el = document.getElementById('error-toast');
+  el.textContent = msg; el.classList.add('visible');
+  setTimeout(() => el.classList.remove('visible'), 5000);
+}
+
+// ============================================================
+// MAIN FLOW
+// ============================================================
+async function startRecording() {
+  const script = document.getElementById('script-input').value.trim();
+  if (!script) { showError('Enter a script first.'); return; }
+
+  const apiKey = localStorage.getItem('sarvam_api_key');
+  if (!apiKey) { showError('Add your Sarvam API key in Settings first.'); toggleSettings(); return; }
+
+  state.words = parseScript(script);
+  state.currentIndex = -1;
+  renderWords(state.words);
+
+  document.getElementById('edit-screen').style.display = 'none';
+  document.getElementById('record-screen').style.display = 'block';
+
+  try {
+    state.cameraStream = await initCamera();
+    document.getElementById('camera-preview').srcObject = state.cameraStream;
+    state.mediaRecorder = initRecorder(state.cameraStream);
+    state.isRecording = true;
+    initAudioPipeline(state.cameraStream);
+    connectProxy();
+    startTimer();
+    advanceToWord(0);
+  } catch (err) {
+    console.error('Start error:', err);
+    if (err.name === 'NotAllowedError') showError('Camera/mic permission denied.');
+    else if (err.name === 'NotFoundError') showError('No camera found.');
+    else showError('Error: ' + err.message);
+    backToEdit();
+  }
+}
+
+function stopAndSave() {
+  state.isRecording = false;
+  stopTimer();
+  stopSTT();
+  if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') state.mediaRecorder.stop();
+  if (state.cameraStream) { state.cameraStream.getTracks().forEach(t => t.stop()); state.cameraStream = null; }
+  document.getElementById('camera-preview').srcObject = null;
+  setTimeout(() => {
+    document.getElementById('record-screen').style.display = 'none';
+    document.getElementById('edit-screen').style.display = 'flex';
+  }, 500);
+}
+
+function backToEdit() {
+  if (state.isRecording) {
+    state.isRecording = false;
+    stopTimer();
+    stopSTT();
+    if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
+      state.mediaRecorder.ondataavailable = null;
+      state.mediaRecorder.onstop = null;
+      state.mediaRecorder.stop();
+    }
+    if (state.cameraStream) { state.cameraStream.getTracks().forEach(t => t.stop()); state.cameraStream = null; }
+    document.getElementById('camera-preview').srcObject = null;
+    state.recordedChunks = [];
+  }
+  document.getElementById('record-screen').style.display = 'none';
+  document.getElementById('edit-screen').style.display = 'flex';
+}
+
+// Reconnect on visibility change
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.isRecording) {
+    if (!state.proxyWs || state.proxyWs.readyState !== WebSocket.OPEN) connectProxy();
+  }
+});
+
+// Close settings on backdrop click
+document.getElementById('settings-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'settings-modal') toggleSettings();
+});
+</script>
+</body>
+</html>
