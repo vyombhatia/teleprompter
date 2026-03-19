@@ -1,0 +1,12 @@
+services:
+  - type: web
+    runtime: node
+    name: teleprompter
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+    repo: https://github.com/vyombhatia/teleprompter
+    branch: main
